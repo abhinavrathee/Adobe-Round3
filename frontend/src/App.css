@@ -29,7 +29,15 @@ body { margin: 0; background: var(--bg); color: var(--text); font-family: ui-san
 .layout { display:grid; grid-template-columns: 360px 1fr; gap: 16px; padding: 16px; height: calc(100vh - 57px); }
 .sidebar { overflow-y: auto; padding-right: 6px; }
 .viewer { height: 100%; }
-.viewer-card { height: 100%; border: 1px solid var(--border); border-radius: 14px; background: var(--panel); overflow: hidden; }
+
+/* IMPORTANT: let the Adobe viewer scroll/zoom inside; don't clip it */
+.viewer-card {
+  height: 100%;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--panel);
+  overflow: visible;            /* was hidden — this blocks Adobe's internal scrollbars/toolbars */
+}
 
 .card { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 14px; margin-bottom: 12px; }
 .card-title { margin: 0 0 8px 0; font-size: 14px; font-weight: 700; }
@@ -42,5 +50,26 @@ body { margin: 0; background: var(--bg); color: var(--text); font-family: ui-san
 .file { opacity: .8; }
 .snippet { font-size: 13px; line-height: 1.35; }
 
-.pdf-container { width: 100%; height: 100%; background: #f3f4f6; }
-.pdf-frame { width: 100%; height: 100%; border: 0; opacity: .01; } /* hidden under Adobe overlay */
+.pdf-container {
+  width: 100%;
+  height: 100%;
+  background: #f3f4f6;
+  position: relative;           /* ensure overlay absolute positioning anchors correctly */
+  overflow: hidden;             /* keep inner layers tidy; Adobe handles its own scroll */
+}
+
+.pdf-frame {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  opacity: 1;                   /* keep visible; Adobe overlay sits above it */
+}
+
+/* Help Adobe overlay handle wheel/pinch smoothly inside the sized container */
+#adobe-dc-view,
+[id^="adobe-dc-view"] {
+  position: absolute;
+  inset: 0;
+  touch-action: pan-y pinch-zoom;   /* allow two-finger zoom/trackpad */
+  overscroll-behavior: contain;     /* avoid bubbling scroll to parent */
+}

@@ -2,7 +2,7 @@ from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import List, Optional, Set
 from urllib.parse import unquote
 from pathlib import Path
 import shutil, time, threading
@@ -79,21 +79,24 @@ def get_file(filename: str):
         },
     )
 
-# ------------- Manual selection ----------
+# ------------- Related (selection-driven) ----------
 class RelatedReq(BaseModel):
-    selection_text: str
+    selection_text: Optional[str] = None  # original
+    selected_text: Optional[str] = None   # alias accepted
     doc_name: Optional[str] = None
     page: Optional[int] = None
+    k: Optional[int] = 5
 
 @app.post("/api/related")
 def related(req: RelatedReq):
-    text = (req.selection_text or "").strip()
+    text = (req.selection_text or req.selected_text or "").strip()
     if not text:
         return {"selection_text": req.selection_text, "results": []}
-    res = search(text, top_k=5)
+    res = search(text, top_k=max(1, min(20, req.k or 5)))
     print(f"[related] len={len(res)}")
-    return {"selection_text": req.selection_text, "results": res}
+    return {"selection_text": text, "results": res}
 
+# ------------- Insights (selection -> bullets) -------
 class InsightsReq(BaseModel):
     selection_text: str
 
@@ -102,11 +105,38 @@ def insights(req: InsightsReq):
     text = (req.selection_text or "").strip()
     if not text:
         return {"insights": None}
-    ideas = gemini_insights(text)
+    try:
+        ideas = gemini_insights(text)
+    except Exception as e:
+        print("[insights] error", e)
+        ideas = {"keyInsights": [], "facts": [], "contradictions": [], "connections": [], "questions": []}
     print("[insights] ok")
     return {"insights": ideas}
 
-# -------- Auto by file+page (no selection) --------
+# -------- Auto insights: by page OR by selection text --------
+class InsightAutoReq(BaseModel):
+    file: str
+    page: int = 1
+    text: Optional[str] = None  # if present, analyze this text instead of page
+
+@app.post("/api/auto/insights")
+def auto_insights(req: InsightAutoReq):
+    if req.text and req.text.strip():
+        content = req.text.strip()
+        print(f"[auto_insights] selection text len={len(content)}")
+    else:
+        content = get_page_text(req.file, int(req.page)) or ""
+        print(f"[auto_insights] file={req.file} page={req.page} chars={len(content)}")
+
+    if not content.strip():
+        return {"file": req.file, "page": req.page, "insights": None}
+    try:
+        return {"file": req.file, "page": req.page, "insights": gemini_insights(content)}
+    except Exception as e:
+        print("[auto_insights] error", e)
+        return {"file": req.file, "page": req.page, "insights": None}
+
+# -------- Auto related (no change) --------
 class PageReq(BaseModel):
     file: str
     page: int
@@ -119,10 +149,17 @@ def auto_related(req: PageReq):
         return {"file": req.file, "page": req.page, "results": []}
     return {"file": req.file, "page": req.page, "results": search(page_text, top_k=5)}
 
-@app.post("/api/auto/insights")
-def auto_insights(req: PageReq):
-    page_text = get_page_text(req.file, int(req.page)) or ""
-    print(f"[auto_insights] file={req.file} page={req.page} chars={len(page_text)}")
-    if not page_text.strip():
-        return {"file": req.file, "page": req.page, "insights": None}
-    return {"file": req.file, "page": req.page, "insights": gemini_insights(page_text)}
+# ---------- Index status / rebuild (dev helpers) ----------
+@app.get("/api/index/status")
+def index_status():
+    idx = ensure_index()
+    files: Set[str] = set(c.pdf_name for c in (idx.chunks or []))
+    return {"files": sorted(files), "chunk_count": len(idx.chunks) if idx and idx.chunks else 0}
+
+@app.post("/api/index/rebuild")
+def index_rebuild():
+    try:
+        build_index()
+        return {"ok": True}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}

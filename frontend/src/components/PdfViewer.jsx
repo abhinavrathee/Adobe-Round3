@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 const KEY = import.meta.env.VITE_ADOBE_EMBED_KEY || "";
 
@@ -7,43 +7,59 @@ const KEY = import.meta.env.VITE_ADOBE_EMBED_KEY || "";
  *  - fileUrl: string
  *  - onPageInfo?: ({file, page}) => void
  *  - onSelectionText?: (text: string, info: {file: string, page: number}) => void
+ *
+ * Uses Adobe PDF Embed API ONLY (no <iframe> fallback).
+ * Listens to FilePreviewEvents via CallbackType.EVENT_LISTENER.
  */
 export default function PdfViewer({ fileUrl, onPageInfo, onSelectionText }) {
-  const adobeRef = useRef(null);
+  const hostRef = useRef(null);
+  const viewRef = useRef(null);
+  const apisRef = useRef(null);
+  const divIdRef = useRef(`adobe-dc-view-${Math.random().toString(36).slice(2)}`);
+
+  // idle | loading | ready | no_key | no_sdk | no_url | error
+  const [status, setStatus] = useState("idle");
+  const [lastError, setLastError] = useState("");
 
   const fileName = useMemo(() => {
     if (!fileUrl) return "";
     try {
       const raw = fileUrl.split("/api/file/")[1] || "";
-      return decodeURIComponent(raw.split("#")[0] || "").trim();
+      return decodeURIComponent(raw.split("#")[0] || "").trim() || "document.pdf";
     } catch {
-      return "";
+      return "document.pdf";
     }
   }, [fileUrl]);
 
-  const nativeUrl = useMemo(() => {
-    if (!fileUrl) return "";
-    const hint = "#view=FitH&zoom=page-width";
-    return fileUrl.includes("#") ? fileUrl : `${fileUrl}${hint}`;
-  }, [fileUrl]);
-
   useEffect(() => {
-    const mount = () => {
-      const host = adobeRef.current;
-      if (!host || !fileUrl || !KEY) return;
+    setLastError("");
+    if (!fileUrl) { setStatus("no_url"); return; }
+    if (!KEY) { setStatus("no_key"); return; }
+
+    const mount = async () => {
+      if (!hostRef.current) return;
+      if (!(window.AdobeDC && window.AdobeDC.View)) { setStatus("no_sdk"); return; }
 
       try {
-        host.innerHTML = "";
-        if (!window.AdobeDC || !window.AdobeDC.View) return;
+        setStatus("loading");
 
-        console.log("[PdfViewer] initializing Adobe View", { fileUrl, fileName });
-        const view = new window.AdobeDC.View({ clientId: KEY, divId: "adobe-dc-view" });
+        // Fresh container
+        hostRef.current.innerHTML = "";
+        const inner = document.createElement("div");
+        inner.id = divIdRef.current;
+        inner.style.position = "absolute";
+        inner.style.inset = "0";
+        inner.style.width = "100%";
+        inner.style.height = "100%";
+        hostRef.current.appendChild(inner);
 
-        view.previewFile(
-          {
-            content: { location: { url: fileUrl } },
-            metaData: { fileName: fileName || "document.pdf" },
-          },
+        // Create viewer
+        const view = new window.AdobeDC.View({ clientId: KEY, divId: divIdRef.current });
+        viewRef.current = view;
+
+        // Start preview & get APIs handle
+        const preview = view.previewFile(
+          { content: { location: { url: fileUrl } }, metaData: { fileName } },
           {
             embedMode: "SIZED_CONTAINER",
             defaultViewMode: "FIT_WIDTH",
@@ -54,83 +70,92 @@ export default function PdfViewer({ fileUrl, onPageInfo, onSelectionText }) {
           }
         );
 
-        const notifyPage = async (label = "") => {
-          try {
-            const range = await view.getPageRange();
-            const page = Array.isArray(range) && range.length ? range[0] : 1;
-            console.log(`[PdfViewer] ${label} page=`, page);
-            onPageInfo && onPageInfo({ file: fileName, page });
-          } catch (e) {
-            console.warn("[PdfViewer] getPageRange error", e);
-          }
-        };
+        const viewer = await preview;
+        const apis = await viewer.getAPIs();
+        apisRef.current = apis;
 
-        // Fire on load + page changes
+        const FP = window.AdobeDC.View.Enum.FilePreviewEvents;
+
+        // Single EVENT_LISTENER for all the interesting file preview events
         view.registerCallback(
-          window.AdobeDC.View.Enum.CallbackType.DOCUMENT_LOADED,
-          () => notifyPage("DOCUMENT_LOADED"),
-          {}
-        );
-        view.registerCallback(
-          window.AdobeDC.View.Enum.CallbackType.PAGES_IN_VIEW_CHANGE,
-          () => notifyPage("PAGES_IN_VIEW_CHANGE"),
-          {}
-        );
-
-        // Robustly read selection text from Adobe payload
-        const extractText = (payload) => {
-          // Known shapes: selectedContent: [{text}], selections: [{text}], data: [{items:[{str}]}]
-          const groups =
-            payload?.selectedContent ||
-            payload?.selections ||
-            payload?.data ||
-            [];
-
-          const fromGroups = groups
-            .flatMap((g) => {
-              if (Array.isArray(g?.items)) {
-                return g.items.map((it) => it?.str || it?.text || it?.content || "");
-              }
-              return [g?.text || g?.Str || g?.str || g?.content || ""];
-            })
-            .filter(Boolean);
-
-          // Fallback for some builds:
-          const fallback =
-            (payload?.text && [payload.text]) ||
-            (payload?.content && [payload.content]) ||
-            [];
-
-          const text = [...fromGroups, ...fallback].join(" ").replace(/\s+/g, " ").trim();
-          return text;
-        };
-
-        // On selection end
-        view.registerCallback(
-          window.AdobeDC.View.Enum.CallbackType.SELECTION_END,
-          async (evt) => {
+          window.AdobeDC.View.Enum.CallbackType.EVENT_LISTENER,
+          async (event) => {
             try {
-              console.log("[PdfViewer] SELECTION_END raw evt:", evt);
-              const sel = await view.getSelectedContent();
-              console.log("[PdfViewer] getSelectedContent() ->", sel);
+              switch (event.type) {
+                // Rendering has completed — viewer is interactive
+                case "APP_RENDERING_DONE":
+                case "DOCUMENT_OPEN": {
+                  setStatus("ready");
+                  // fire initial page info
+                  if (onPageInfo && apisRef.current?.getPageRange) {
+                    const range = await apisRef.current.getPageRange();
+                    const page = Array.isArray(range) && range.length ? range[0] : 1;
+                    onPageInfo({ file: fileName, page });
+                  }
+                  break;
+                }
 
-              const text = extractText(sel);
-              let page = 1;
-              try {
-                const range = await view.getPageRange();
-                page = Array.isArray(range) && range.length ? range[0] : 1;
-              } catch {}
+                // Page change (some SDKs emit PAGE_VIEW via Analytics; FilePreview emits PAGES_IN_VIEW_CHANGE)
+                case "PAGES_IN_VIEW_CHANGE":
+                case "PAGE_VIEW": {
+                  if (onPageInfo && apisRef.current?.getPageRange) {
+                    const range = await apisRef.current.getPageRange();
+                    const page = Array.isArray(range) && range.length ? range[0] : 1;
+                    onPageInfo({ file: fileName, page });
+                  }
+                  break;
+                }
 
-              console.log("[PdfViewer] selection text:", text, "page:", page);
-              if (text && onSelectionText) onSelectionText(text, { file: fileName, page });
+                // User finished a text selection
+                case "PREVIEW_SELECTION_END": {
+                  if (!onSelectionText || !apisRef.current?.getSelectedContent) break;
+
+                  const sel = await apisRef.current.getSelectedContent();
+
+                  // Robust extraction across payload shapes
+                  const groups = sel?.data || sel?.selectedContent || sel?.selections || [];
+                  const fromGroups = groups
+                    .flatMap((g) =>
+                      Array.isArray(g?.items)
+                        ? g.items.map((it) => it?.str || it?.text || it?.content || "")
+                        : [g?.text || g?.Str || g?.str || g?.content || ""]
+                    )
+                    .filter(Boolean);
+                  const fallback = (sel?.text && [sel.text]) || (sel?.content && [sel.content]) || [];
+                  const text = [...fromGroups, ...fallback].join(" ").replace(/\s+/g, " ").trim();
+
+                  let page = 1;
+                  try {
+                    const range = await apisRef.current.getPageRange();
+                    page = Array.isArray(range) && range.length ? range[0] : 1;
+                  } catch {}
+                  if (text) onSelectionText(text, { file: fileName, page });
+                  break;
+                }
+
+                default:
+                  // ignore other events
+                  break;
+              }
             } catch (e) {
-              console.warn("[PdfViewer] selection handler error", e);
+              console.warn("[Adobe EVENT_LISTENER] handler error:", e);
             }
           },
-          {}
+          {
+            enableFilePreviewEvents: true,
+            listenOn: [
+              FP.APP_RENDERING_DONE,
+              FP.DOCUMENT_OPEN,
+              FP.PAGES_IN_VIEW_CHANGE,
+              FP.PREVIEW_SELECTION_END,
+            ],
+          }
         );
+
       } catch (e) {
         console.error("[PdfViewer] mount error", e);
+        setLastError(String(e?.message || e));
+        setStatus("error");
       }
     };
 
@@ -149,8 +174,47 @@ export default function PdfViewer({ fileUrl, onPageInfo, onSelectionText }) {
 
   return (
     <div className="pdf-container" style={{ position: "relative" }}>
-      <iframe className="pdf-frame" title="PDF" src={nativeUrl} />
-      <div id="adobe-dc-view" ref={adobeRef} style={{ position: "absolute", inset: 0, display: KEY ? "block" : "none" }} />
+      {/* Adobe host ONLY */}
+      <div
+        ref={hostRef}
+        style={{
+          position: "absolute",
+          inset: 0,
+          zIndex: 1,
+          touchAction: "pan-y pinch-zoom",
+          overscrollBehavior: "contain",
+        }}
+      />
+      {/* status (click-through) */}
+      {status !== "ready" && (
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            display: "grid",
+            placeItems: "center",
+            pointerEvents: "none",
+            zIndex: 2,
+          }}
+        >
+          <div
+            style={{
+              background: "rgba(255,255,255,0.9)",
+              border: "1px solid #e5e7eb",
+              borderRadius: 12,
+              padding: "10px 14px",
+              fontSize: 13,
+              color: "#374151",
+            }}
+          >
+            {status === "loading" && "Loading PDF…"}
+            {status === "no_url" && "No document loaded."}
+            {status === "no_key" && "VITE_ADOBE_EMBED_KEY missing."}
+            {status === "no_sdk" && "Adobe SDK not loaded (check index.html script)."}
+            {status === "error" && `Adobe viewer error. ${lastError || ""}`}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
