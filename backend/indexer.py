@@ -125,3 +125,11 @@ def get_page_text(pdf_name: str, page: int) -> str:
         if ch.pdf_name == pdf_name and ch.page == page:
             return ch.text or ""
     return ""
+
+# ---------- NEW: fetch all pages of a given PDF ----------
+def get_doc_pages(pdf_name: str) -> List[Chunk]:
+    """
+    Return all indexed page chunks for this PDF (may be empty if not yet indexed).
+    """
+    idx = ensure_index()
+    return [c for c in idx.chunks if c.pdf_name == pdf_name]

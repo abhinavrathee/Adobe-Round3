@@ -7,9 +7,6 @@ const KEY = import.meta.env.VITE_ADOBE_EMBED_KEY || "";
  *  - fileUrl: string
  *  - onPageInfo?: ({file, page}) => void
  *  - onSelectionText?: (text: string, info: {file: string, page: number}) => void
- *
- * Uses Adobe PDF Embed API ONLY (no <iframe> fallback).
- * Listens to FilePreviewEvents via CallbackType.EVENT_LISTENER.
  */
 export default function PdfViewer({ fileUrl, onPageInfo, onSelectionText }) {
   const hostRef = useRef(null);
@@ -20,6 +17,7 @@ export default function PdfViewer({ fileUrl, onPageInfo, onSelectionText }) {
   // idle | loading | ready | no_key | no_sdk | no_url | error
   const [status, setStatus] = useState("idle");
   const [lastError, setLastError] = useState("");
+  const safetyTimerRef = useRef(null);
 
   const fileName = useMemo(() => {
     if (!fileUrl) return "";
@@ -43,7 +41,7 @@ export default function PdfViewer({ fileUrl, onPageInfo, onSelectionText }) {
       try {
         setStatus("loading");
 
-        // Fresh container
+        // Reset container
         hostRef.current.innerHTML = "";
         const inner = document.createElement("div");
         inner.id = divIdRef.current;
@@ -57,7 +55,7 @@ export default function PdfViewer({ fileUrl, onPageInfo, onSelectionText }) {
         const view = new window.AdobeDC.View({ clientId: KEY, divId: divIdRef.current });
         viewRef.current = view;
 
-        // Start preview & get APIs handle
+        // Start preview
         const preview = view.previewFile(
           { content: { location: { url: fileUrl } }, metaData: { fileName } },
           {
@@ -76,17 +74,30 @@ export default function PdfViewer({ fileUrl, onPageInfo, onSelectionText }) {
 
         const FP = window.AdobeDC.View.Enum.FilePreviewEvents;
 
-        // Single EVENT_LISTENER for all the interesting file preview events
+        // One listener for multiple events
         view.registerCallback(
           window.AdobeDC.View.Enum.CallbackType.EVENT_LISTENER,
           async (event) => {
             try {
               switch (event.type) {
-                // Rendering has completed — viewer is interactive
+                // Any of these means the viewer is usable -> clear "Loading…"
                 case "APP_RENDERING_DONE":
-                case "DOCUMENT_OPEN": {
+                case "APP_RENDERED":
+                case "DOCUMENT_OPEN":
+                case "DOCUMENT_LOADED":
+                case "PAGES_RENDERED":
+                case "PAGE_VIEW":
                   setStatus("ready");
-                  // fire initial page info
+                  // fire initial/updated page info
+                  if (onPageInfo && apisRef.current?.getPageRange) {
+                    const range = await apisRef.current.getPageRange();
+                    const page = Array.isArray(range) && range.length ? range[0] : 1;
+                    onPageInfo({ file: fileName, page });
+                  }
+                  break;
+
+                // Some SDK builds emit this for page changes
+                case "PAGES_IN_VIEW_CHANGE": {
                   if (onPageInfo && apisRef.current?.getPageRange) {
                     const range = await apisRef.current.getPageRange();
                     const page = Array.isArray(range) && range.length ? range[0] : 1;
@@ -95,24 +106,10 @@ export default function PdfViewer({ fileUrl, onPageInfo, onSelectionText }) {
                   break;
                 }
 
-                // Page change (some SDKs emit PAGE_VIEW via Analytics; FilePreview emits PAGES_IN_VIEW_CHANGE)
-                case "PAGES_IN_VIEW_CHANGE":
-                case "PAGE_VIEW": {
-                  if (onPageInfo && apisRef.current?.getPageRange) {
-                    const range = await apisRef.current.getPageRange();
-                    const page = Array.isArray(range) && range.length ? range[0] : 1;
-                    onPageInfo({ file: fileName, page });
-                  }
-                  break;
-                }
-
-                // User finished a text selection
+                // Text selection complete
                 case "PREVIEW_SELECTION_END": {
                   if (!onSelectionText || !apisRef.current?.getSelectedContent) break;
-
                   const sel = await apisRef.current.getSelectedContent();
-
-                  // Robust extraction across payload shapes
                   const groups = sel?.data || sel?.selectedContent || sel?.selections || [];
                   const fromGroups = groups
                     .flatMap((g) =>
@@ -134,7 +131,6 @@ export default function PdfViewer({ fileUrl, onPageInfo, onSelectionText }) {
                 }
 
                 default:
-                  // ignore other events
                   break;
               }
             } catch (e) {
@@ -148,10 +144,18 @@ export default function PdfViewer({ fileUrl, onPageInfo, onSelectionText }) {
               FP.DOCUMENT_OPEN,
               FP.PAGES_IN_VIEW_CHANGE,
               FP.PREVIEW_SELECTION_END,
+              // extra events that help clear the overlay reliably
+              FP.APP_RENDERED,
+              FP.DOCUMENT_LOADED,
+              FP.PAGES_RENDERED,
+              FP.PAGE_VIEW,
             ],
           }
         );
 
+        // Safety timeout: if events don’t fire, clear overlay anyway
+        if (safetyTimerRef.current) clearTimeout(safetyTimerRef.current);
+        safetyTimerRef.current = setTimeout(() => setStatus("ready"), 2000);
       } catch (e) {
         console.error("[PdfViewer] mount error", e);
         setLastError(String(e?.message || e));
@@ -166,6 +170,10 @@ export default function PdfViewer({ fileUrl, onPageInfo, onSelectionText }) {
       document.addEventListener("adobe_dc_view_sdk.ready", onReady, { once: true });
       return () => document.removeEventListener("adobe_dc_view_sdk.ready", onReady);
     }
+
+    return () => {
+      if (safetyTimerRef.current) clearTimeout(safetyTimerRef.current);
+    };
   }, [fileUrl, fileName, onPageInfo, onSelectionText]);
 
   if (!fileUrl) {
@@ -174,7 +182,6 @@ export default function PdfViewer({ fileUrl, onPageInfo, onSelectionText }) {
 
   return (
     <div className="pdf-container" style={{ position: "relative" }}>
-      {/* Adobe host ONLY */}
       <div
         ref={hostRef}
         style={{
@@ -185,7 +192,6 @@ export default function PdfViewer({ fileUrl, onPageInfo, onSelectionText }) {
           overscrollBehavior: "contain",
         }}
       />
-      {/* status (click-through) */}
       {status !== "ready" && (
         <div
           style={{

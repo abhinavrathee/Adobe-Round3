@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+.env
+
+# FastAPI/uvicorn reload cache
+*.pid
+
+# Project data
+data/
+!data/library/       # keep the folder
+data/library/*.pdf
+data/*.pkl
+
+# Audio + static artifacts
+static/*.mp3
+static/*.wav
+static/*.ogg
+
+# Secrets
+service_account.json
+*.key
+*.pem

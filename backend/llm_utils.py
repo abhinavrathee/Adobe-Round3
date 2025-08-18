@@ -17,7 +17,7 @@ def _cfg():
     genai.configure(api_key=GEMINI_API_KEY)
     return genai
 
-# ---------- Prompts ----------
+# ---------- Prompts (Insights) ----------
 
 JSON_PROMPT = """You analyze a PDF page and return concise, grounded bullets.
 Use ONLY the provided page text. Do not invent sources.
@@ -129,7 +129,7 @@ def _minimal_from_text(selection: str) -> dict:
         "questions": _clean_and_clip(questions, max_words=18, ensure_qmark=True),
     }
 
-# ---------- Main entry ----------
+# ---------- Main entry (Insights) ----------
 
 def gemini_insights(selection: str) -> dict:
     if not selection:
@@ -170,3 +170,76 @@ def gemini_insights(selection: str) -> dict:
 
     # 3) Last resort
     return _minimal_from_text(selection)
+
+# =======================================================================
+# NEW: Podcast overview generator (single voice, 2–5 minutes target)
+# =======================================================================
+
+PODCAST_PROMPT = """You are a friendly narrator. Create a SPOKEN OVERVIEW of a PDF for a listener.
+Goal: in about {target_words} words (roughly 2–5 minutes), explain WHAT this PDF is about,
+what it covers, and the most important ideas. Use only the provided material.
+
+STYLE RULES (important):
+- Do NOT mention page numbers, tables, or figure labels.
+- Do NOT read raw lists or serial numbers. Prefer natural sentences.
+- Be concise, engaging, and scannable by ear—short sentences are good.
+- Keep a neutral, informative tone. No markdown, no headings, no bullets.
+- Use names/terms from the doc only when helpful; avoid filler.
+- Structure like: quick hook → what the document covers → 3–6 core ideas/themes →
+  notable contrasts or cautions → quick closing with who benefits / next step.
+
+DOCUMENT EXCERPTS:
+\"\"\"{doc_text}\"\"\"
+
+OPTIONAL INSIGHTS (bullets from the app):
+{insights_text}
+
+OPTIONAL RELATED EXCERPTS:
+{related_text}
+
+Now produce a single-paragraph narration (multiple sentences), around {target_words} words, plain text only.
+"""
+
+def _clip(s: str, limit: int) -> str:
+    s = (s or "").strip()
+    if len(s) <= limit:
+        return s
+    return s[:limit]
+
+def gemini_podcast_overview(doc_text: str,
+                            insights: list[str] | None = None,
+                            related: list[str] | None = None,
+                            target_words: int = 450) -> str:
+    """
+    Returns a natural-sounding narration (no lists, no page refs),
+    ~target_words long (2–5 min).
+    """
+    _cfg()
+    model = genai.GenerativeModel(GEMINI_MODEL)
+
+    insights_text = ""
+    if insights:
+        insights_text = "\n".join(f"- {re.sub(r'\\s+', ' ', x).strip()}" for x in insights[:8])
+
+    related_text = ""
+    if related:
+        related_text = "\n".join(re.sub(r"\\s+", " ", x).strip() for x in related[:6])
+
+    prompt = PODCAST_PROMPT.format(
+        target_words=max(320, min(700, int(target_words or 450))),
+        doc_text=_clip(doc_text, 7000),
+        insights_text=_clip(insights_text, 1500),
+        related_text=_clip(related_text, 2000),
+    )
+
+    try:
+        resp = model.generate_content(prompt)
+        text = (getattr(resp, "text", "") or "").strip()
+        # Safety: remove stray bullets/markdown and squeeze spaces
+        text = re.sub(r"^[\\-\\*\\d\\.)\\s]+", "", text)
+        text = re.sub(r"\\s+", " ", text).strip()
+        return text
+    except Exception as e:
+        # Fallback: if model fails, at least compress the text naively
+        base = re.sub(r"\\s+", " ", (doc_text or ""))[:2000]
+        return f"This document provides an overview based on selected sections. Key ideas include: {base}"
