@@ -68,35 +68,36 @@ export default function PdfViewer({ fileUrl, onPageInfo, onSelectionText }) {
           }
         );
 
+        // Wait until the viewer and APIs are definitely ready
         const viewer = await preview;
         const apis = await viewer.getAPIs();
         apisRef.current = apis;
 
         const FP = window.AdobeDC.View.Enum.FilePreviewEvents;
 
-        // One listener for multiple events
+        // Single, consolidated event listener registered AFTER APIs are ready
         view.registerCallback(
           window.AdobeDC.View.Enum.CallbackType.EVENT_LISTENER,
           async (event) => {
             try {
               switch (event.type) {
-                // Any of these means the viewer is usable -> clear "Loading…"
+                // Viewer became usable
                 case "APP_RENDERING_DONE":
                 case "APP_RENDERED":
                 case "DOCUMENT_OPEN":
                 case "DOCUMENT_LOADED":
                 case "PAGES_RENDERED":
-                case "PAGE_VIEW":
+                case "PAGE_VIEW": {
                   setStatus("ready");
-                  // fire initial/updated page info
                   if (onPageInfo && apisRef.current?.getPageRange) {
                     const range = await apisRef.current.getPageRange();
                     const page = Array.isArray(range) && range.length ? range[0] : 1;
                     onPageInfo({ file: fileName, page });
                   }
                   break;
+                }
 
-                // Some SDK builds emit this for page changes
+                // Page changed
                 case "PAGES_IN_VIEW_CHANGE": {
                   if (onPageInfo && apisRef.current?.getPageRange) {
                     const range = await apisRef.current.getPageRange();
@@ -106,27 +107,40 @@ export default function PdfViewer({ fileUrl, onPageInfo, onSelectionText }) {
                   break;
                 }
 
-                // Text selection complete
+                // Text selection finished → extract via the same, already-ready APIs
                 case "PREVIEW_SELECTION_END": {
-                  if (!onSelectionText || !apisRef.current?.getSelectedContent) break;
-                  const sel = await apisRef.current.getSelectedContent();
-                  const groups = sel?.data || sel?.selectedContent || sel?.selections || [];
-                  const fromGroups = groups
-                    .flatMap((g) =>
-                      Array.isArray(g?.items)
-                        ? g.items.map((it) => it?.str || it?.text || it?.content || "")
-                        : [g?.text || g?.Str || g?.str || g?.content || ""]
-                    )
-                    .filter(Boolean);
-                  const fallback = (sel?.text && [sel.text]) || (sel?.content && [sel.content]) || [];
-                  const text = [...fromGroups, ...fallback].join(" ").replace(/\s+/g, " ").trim();
+                  if (!onSelectionText) break;
+
+                  let text = "";
+                  try {
+                    const sel = await apis.getSelectedContent();
+                    const data = sel?.data ?? sel?.selectedContent ?? sel?.selections ?? sel?.text ?? sel?.content;
+
+                    if (typeof data === "string") {
+                      text = data;
+                    } else if (Array.isArray(data)) {
+                      text = data
+                        .map((it) => it?.Str || it?.str || it?.text || it?.content || "")
+                        .filter(Boolean)
+                        .join(" ");
+                    } else if (sel?.text) {
+                      text = sel.text;
+                    } else if (sel?.content) {
+                      text = sel.content;
+                    }
+                    text = (text || "").replace(/\s+/g, " ").trim();
+                  } catch {
+                    text = "";
+                  }
+                  if (!text) break;
 
                   let page = 1;
                   try {
-                    const range = await apisRef.current.getPageRange();
+                    const range = await apis.getPageRange();
                     page = Array.isArray(range) && range.length ? range[0] : 1;
                   } catch {}
-                  if (text) onSelectionText(text, { file: fileName, page });
+
+                  onSelectionText(text, { file: fileName, page });
                   break;
                 }
 
@@ -144,7 +158,6 @@ export default function PdfViewer({ fileUrl, onPageInfo, onSelectionText }) {
               FP.DOCUMENT_OPEN,
               FP.PAGES_IN_VIEW_CHANGE,
               FP.PREVIEW_SELECTION_END,
-              // extra events that help clear the overlay reliably
               FP.APP_RENDERED,
               FP.DOCUMENT_LOADED,
               FP.PAGES_RENDERED,
