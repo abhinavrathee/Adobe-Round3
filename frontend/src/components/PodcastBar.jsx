@@ -1,18 +1,14 @@
+// frontend/src/components/PodcastBar.jsx
 import { useState } from "react";
 const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:5001";
 
-// You may set these in frontend .env (optional)
-// VITE_TTS_PROVIDER=local | gcp | azure
-// VITE_TTS_VOICES=en-US-Neural2-F,en-US-Neural2-D
+// Optional envs
 const DEFAULT_PROVIDER = import.meta.env.VITE_TTS_PROVIDER || undefined;
 const DEFAULT_VOICES = (import.meta.env.VITE_TTS_VOICES || "")
   .split(",")
   .map(s => s.trim())
   .filter(Boolean);
 
-/**
- * Header podcast generator (never covers the PDF UI).
- */
 export default function PodcastBar({
   file,
   currentPage,
@@ -27,7 +23,6 @@ export default function PodcastBar({
   const [error, setError] = useState("");
   const [open, setOpen] = useState(false);
 
-  // filter related to current file
   const sameFileRelated = (related || []).filter(r => {
     const f = r.pdf_name || r.file || r.filename || r.metadata?.file;
     if (!file) return false;
@@ -50,11 +45,12 @@ export default function PodcastBar({
         })).filter(r => r.text),
         insights: insights,
         // unified TTS params:
-        tts_provider: DEFAULT_PROVIDER,        // override via env if needed
+        tts_provider: DEFAULT_PROVIDER,
         speakers: (DEFAULT_VOICES.length > 1 ? 2 : 1),
         voices: DEFAULT_VOICES.length ? DEFAULT_VOICES : undefined,
         rate: 150,
-        target_words: 800
+        // NEW: ask for ~420 words; backend will clamp to 2–5 minutes anyway
+        target_words: 420
       };
 
       const res = await fetch(`${API_BASE}/api/podcast/generate`, {
@@ -84,10 +80,12 @@ export default function PodcastBar({
         disabled={busy || !file}
         className="btn"
         style={{
-          background: "#16a34a",
-          borderColor: "#16a34a",
-          color: "white",
-          fontWeight: 700
+          background: "linear-gradient(135deg,#22c55e,#16a34a)",
+          borderColor: "transparent",
+          color: "#0b1a13",
+          fontWeight: 800,
+          padding: "10px 14px",
+          borderRadius: 999
         }}
       >
         {busy ? "Voicing…" : "🎧 Podcast"}
@@ -98,17 +96,29 @@ export default function PodcastBar({
           position: "fixed",
           right: 16,
           top: 64,
-          width: 360,
-          zIndex: 60,
-          background: "white",
-          border: "1px solid #e5e7eb",
-          borderRadius: 14,
-          boxShadow: "0 20px 40px rgba(0,0,0,0.18)",
-          padding: 12
+          width: 380,
+          zIndex: 1000,
+          background: "var(--panel, #ffffff)",
+          border: "1px solid var(--border, #e5e7eb)",
+          borderRadius: 16,
+          boxShadow: "0 24px 48px rgba(0,0,0,0.22)",
+          padding: 14
         }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-            <div style={{ fontWeight: 700, fontSize: 14 }}>Podcast</div>
-            <button className="btn ghost" onClick={() => setOpen(false)} style={{ fontSize: 12 }}>Close</button>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+            <div style={{ fontWeight: 800, fontSize: 14, color: "var(--text, #111827)" }}>Podcast</div>
+            <button
+              onClick={() => setOpen(false)}
+              style={{
+                background: "rgba(2,6,23,0.06)",
+                border: "1px solid rgba(2,6,23,0.12)",
+                color: "var(--text, #111827)",
+                padding: "6px 10px",
+                fontSize: 12,
+                borderRadius: 999
+              }}
+            >
+              Close
+            </button>
           </div>
 
           {error ? (
@@ -116,10 +126,7 @@ export default function PodcastBar({
               {error}
               <div style={{ marginTop: 6, opacity: 0.8 }}>
                 Tip: choose a provider:<br />
-                <code>VITE_TTS_PROVIDER=local | gcp | azure</code><br />
-                For <b>local</b>: install espeak-ng, pydub, ffmpeg.<br />
-                For <b>gcp</b>: set GOOGLE_API_KEY or GOOGLE_APPLICATION_CREDENTIALS in backend.<br />
-                For <b>azure</b>: set AZURE_TTS_* in backend.
+                <code>VITE_TTS_PROVIDER=local | gcp | azure</code>
               </div>
             </div>
           ) : (
@@ -127,7 +134,7 @@ export default function PodcastBar({
               {preview && (
                 <div style={{
                   fontSize: 12,
-                  color: "#475569",
+                  color: "var(--muted, #475569)",
                   whiteSpace: "nowrap",
                   overflow: "hidden",
                   textOverflow: "ellipsis",
@@ -139,7 +146,7 @@ export default function PodcastBar({
               {audioUrl ? (
                 <audio controls src={audioUrl} style={{ width: "100%" }} />
               ) : (
-                <div style={{ fontSize: 12, color: "#6b7280" }}>Preparing audio…</div>
+                <div style={{ fontSize: 12, color: "var(--muted, #6b7280)" }}>Preparing audio…</div>
               )}
             </>
           )}

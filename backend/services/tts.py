@@ -22,6 +22,12 @@ def _env_int(name: str, default: int) -> int:
     except Exception:
         return default
 
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.getenv(name, str(default)))
+    except Exception:
+        return default
+
 def _chunk_text_by_chars(text: str, max_chars: int) -> List[str]:
     """Split text into chunks <= max_chars, respecting whitespace when possible."""
     import re as _re
@@ -37,7 +43,6 @@ def _chunk_text_by_chars(text: str, max_chars: int) -> List[str]:
                 out.append(cur.strip())
                 cur = ""
             if len(tok) > max_chars:
-                # hard split very long token
                 start = 0
                 while start < len(tok):
                     part = tok[start:start + max_chars].strip()
@@ -59,10 +64,18 @@ def _gcp_tts(text: str, output_file: str, voice: Optional[str]) -> str:
     language = os.getenv("GCP_TTS_LANGUAGE", "en-US")
     gcp_voice = voice or os.getenv("GCP_TTS_VOICE", "en-US-Neural2-F")
 
+    # NEW: pace & tone controls (safe defaults)
+    speaking_rate = _env_float("GCP_TTS_RATE", 1.08)  # 1.0 = default pace
+    pitch = _env_float("GCP_TTS_PITCH", 0.0)
+
     client = texttospeech.TextToSpeechClient()
     inp = texttospeech.SynthesisInput(text=text)
     voice_params = texttospeech.VoiceSelectionParams(language_code=language, name=gcp_voice)
-    audio_cfg = texttospeech.AudioConfig(audio_encoding=texttospeech.AudioEncoding.MP3)
+    audio_cfg = texttospeech.AudioConfig(
+        audio_encoding=texttospeech.AudioEncoding.MP3,
+        speaking_rate=speaking_rate,
+        pitch=pitch,
+    )
 
     resp = client.synthesize_speech(input=inp, voice=voice_params, audio_config=audio_cfg)
     Path(output_file).parent.mkdir(parents=True, exist_ok=True)
@@ -104,7 +117,6 @@ def _local_espeak(text: str, output_file: str, voice: Optional[str]) -> str:
         raise RuntimeError(res.stderr or "espeak-ng failed")
     if output_file.lower().endswith(".mp3"):
         if not _HAS_PYDUB:
-            # naive fallback: leave WAV if pydub missing
             Path(wav_path).rename(output_file.replace(".mp3", ".wav"))
             return output_file.replace(".mp3", ".wav")
         from pydub import AudioSegment  # type: ignore
@@ -140,7 +152,6 @@ def _cloud_tts_chunked(text: str, output_file: str, provider: str, voice: Option
                 combined = seg if combined is None else combined + seg
             combined.export(str(out), format="mp3")
         else:
-            # Naive MP3 concat; works for most players since MP3 frames are self-contained
             with open(str(out), "wb") as w:
                 for t in temp_files:
                     with open(t, "rb") as r:
@@ -165,12 +176,10 @@ def generate_audio(text: str, output_file: str, provider: Optional[str] = None, 
         raise ValueError("Text cannot be empty")
     prov = (provider or os.getenv("TTS_PROVIDER", "local")).lower()
 
-    # Effective chunking setting
     max_chars_env = _env_int("TTS_CLOUD_MAX_CHARS", 3000)
-    # Guard: if user disabled chunking but text exceeds GCP/Azure 5k limit, force chunking anyway.
     if prov in ("gcp", "azure"):
         if max_chars_env <= 0 and len(text) > 4800:
-            max_chars_env = 3000  # safe default
+            max_chars_env = 3000
         if max_chars_env > 0 and len(text) > max_chars_env:
             return _cloud_tts_chunked(text, output_file, prov, voice, max_chars_env)
 
@@ -178,5 +187,4 @@ def generate_audio(text: str, output_file: str, provider: Optional[str] = None, 
         return _gcp_tts(text, output_file, voice)
     if prov == "azure":
         return _azure_tts(text, output_file, voice)
-    # local
     return _local_espeak(text, output_file, voice)

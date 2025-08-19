@@ -5,6 +5,7 @@ export default function UploadPanel({ onUploaded }) {
   const inputRef = useRef(null);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
+  const [picked, setPicked] = useState(0);
 
   async function tryIngest(fd) {
     const res = await fetch(`${API_BASE}/api/ingest`, { method: "POST", body: fd });
@@ -31,17 +32,14 @@ export default function UploadPanel({ onUploaded }) {
       setBusy(true); setMsg("");
       let data;
       try {
-        // Prefer existing multi-upload endpoint
         data = await tryIngest(fd);
       } catch {
-        // Fallback: single upload (first file)
         data = await tryUploadSingle(files[0]);
       }
-
       setMsg("Upload successful!");
-      const first = data?.saved?.[0] || data; // accept either shape
+      const first = data?.saved?.[0] || data;
       if (first && onUploaded) onUploaded(first);
-      if (inputRef.current) inputRef.current.value = "";
+      if (inputRef.current) { inputRef.current.value = ""; setPicked(0); }
     } catch (err) {
       setMsg("Upload error: " + (err?.message || err));
     } finally { setBusy(false); }
@@ -49,10 +47,23 @@ export default function UploadPanel({ onUploaded }) {
 
   return (
     <form onSubmit={handleUpload}>
-      <input type="file" ref={inputRef} accept="application/pdf" multiple />
-      <div style={{ height: 8 }} />
-      <button className="btn" disabled={busy}>{busy ? "Uploading…" : "Upload"}</button>
-      {msg && <p className="muted" style={{ marginTop: 8 }}>{msg}</p>}
+      <div className="upload-row" style={{ marginBottom: 8 }}>
+        <label className="file-chip">
+          <span>Choose PDFs</span>
+          <small>{picked ? `${picked} selected` : "click to browse"}</small>
+          <input
+            type="file"
+            ref={inputRef}
+            accept="application/pdf"
+            multiple
+            onChange={(e) => setPicked(e.target.files?.length || 0)}
+          />
+        </label>
+        <button className="btn btn-primary" disabled={busy || !picked}>
+          {busy ? "Uploading…" : "Upload"}
+        </button>
+      </div>
+      {msg && <p className="muted" style={{ marginTop: 4 }}>{msg}</p>}
     </form>
   );
 }

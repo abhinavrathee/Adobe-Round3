@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Tuple, Dict, Any
 import re
+import os
 import pickle
 import threading
 
@@ -87,37 +88,77 @@ def ensure_index(eager: bool = False) -> Index:
         return idx
 
 def _best_snippet(page_text: str, query: str) -> str:
+    """
+    Return ~2–4 sentences most related to the query (<= ~400 chars).
+    """
     sentences = SENT_SPLIT.split(page_text) if page_text else []
     if not sentences:
-        return page_text[:260]
-    scores: List[Tuple[int, float]] = []
-    for i, s in enumerate(sentences):
-        sc = fuzz.partial_ratio(query, s)
-        scores.append((i, sc))
-    scores.sort(key=lambda x: x[1], reverse=True)
-    best_idxs = sorted([i for i, _ in scores[:3]])
-    snippet = " ".join(sentences[i] for i in best_idxs)
-    return (snippet or page_text)[:400]
+        return (page_text or "")[:360]
+    scored = [(i, fuzz.partial_ratio(query, s)) for i, s in enumerate(sentences)]
+    scored.sort(key=lambda x: x[1], reverse=True)
+    picks = sorted([i for i, _ in scored[:3]])
+    snippet = " ".join(sentences[i].strip() for i in picks).strip()
+    if len(snippet) < 160 and len(scored) > 3:
+        i = scored[3][0]
+        if i not in picks:
+            snippet = (snippet + " " + sentences[i].strip()).strip()
+    return snippet[:400]
 
-def search(query: str, top_k: int = 5) -> List[Dict[str, Any]]:
+def search(query: str, top_k: int = 5, min_score: float = 0.0) -> List[Dict[str, Any]]:
+    """
+    Hybrid TF-IDF (cosine) + RapidFuzz re-rank with thresholding.
+    min_score is on 0..1 for the final hybrid score.
+    """
     idx = ensure_index()
     if not idx.chunks:
+        print("[search] index has 0 chunks — nothing to match.")
         return []
+
     qv = idx.vectorizer.transform([query])
-    sims = cosine_similarity(qv, idx.matrix)[0]
-    ranked = sorted(enumerate(sims), key=lambda x: x[1], reverse=True)[:top_k]
-    results = []
-    for pos, score in ranked:
+    cos_all = cosine_similarity(qv, idx.matrix)[0]
+
+    # Pre-filter by cosine to keep fuzzy fast
+    prelim = sorted(enumerate(cos_all), key=lambda x: x[1], reverse=True)[:60]
+
+    W_COS = float(os.getenv("SEARCH_W_COS", "0.65"))
+    W_FUZ = 1.0 - W_COS
+
+    # ✅ FIX: honor caller's min_score (even 0.0). If env var is set, it overrides.
+    if "SEARCH_MIN_SCORE" in os.environ:
+        THRESH = float(os.getenv("SEARCH_MIN_SCORE", "0.58"))
+    else:
+        # clamp to [0,1]
+        try:
+            THRESH = max(0.0, min(1.0, float(min_score)))
+        except Exception:
+            THRESH = 0.58
+
+    scored: List[Dict[str, Any]] = []
+    for pos, cos in prelim:
         ch = idx.chunks[pos]
+        f1 = fuzz.token_set_ratio(query, ch.text) / 100.0
+        f2 = fuzz.partial_ratio(query, ch.text) / 100.0
+        fuzzy = max(f1, f2)
+
+        hybrid = W_COS * float(cos) + W_FUZ * float(fuzzy)
+        if hybrid < THRESH:
+            continue
+
         snip = _best_snippet(ch.text, query)
-        results.append({
+        scored.append({
             "pdf_name": ch.pdf_name,
             "page": ch.page,
-            "score": float(score),
+            "score": round(float(hybrid), 4),
+            "cosine": round(float(cos), 4),
+            "fuzzy": round(float(fuzzy), 4),
             "snippet": snip,
             "section_title": f"Page {ch.page}",
         })
-    return results
+
+    scored.sort(key=lambda x: x["score"], reverse=True)
+    out = scored[:max(1, min(20, top_k))]
+    print(f"[search] query_len={len(query)} thresh={THRESH} hits={len(out)} (from {len(idx.chunks)} chunks)")
+    return out
 
 def get_page_text(pdf_name: str, page: int) -> str:
     idx = ensure_index()
@@ -126,10 +167,7 @@ def get_page_text(pdf_name: str, page: int) -> str:
             return ch.text or ""
     return ""
 
-# ---------- NEW: fetch all pages of a given PDF ----------
+# ---------- fetch all pages of a given PDF ----------
 def get_doc_pages(pdf_name: str) -> List[Chunk]:
-    """
-    Return all indexed page chunks for this PDF (may be empty if not yet indexed).
-    """
     idx = ensure_index()
     return [c for c in idx.chunks if c.pdf_name == pdf_name]

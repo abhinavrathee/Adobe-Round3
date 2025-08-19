@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 
 const KEY = import.meta.env.VITE_ADOBE_EMBED_KEY || "";
 
@@ -8,13 +8,12 @@ const KEY = import.meta.env.VITE_ADOBE_EMBED_KEY || "";
  *  - onPageInfo?: ({file, page}) => void
  *  - onSelectionText?: (text: string, info: {file: string, page: number}) => void
  */
-export default function PdfViewer({ fileUrl, onPageInfo, onSelectionText }) {
+const PdfViewer = forwardRef(function PdfViewer({ fileUrl, onPageInfo, onSelectionText }, ref) {
   const hostRef = useRef(null);
   const viewRef = useRef(null);
   const apisRef = useRef(null);
   const divIdRef = useRef(`adobe-dc-view-${Math.random().toString(36).slice(2)}`);
 
-  // idle | loading | ready | no_key | no_sdk | no_url | error
   const [status, setStatus] = useState("idle");
   const [lastError, setLastError] = useState("");
   const safetyTimerRef = useRef(null);
@@ -29,6 +28,32 @@ export default function PdfViewer({ fileUrl, onPageInfo, onSelectionText }) {
     }
   }, [fileUrl]);
 
+  // Expose “goToPage” to parents; try several Adobe API variants
+  useImperativeHandle(ref, () => ({
+    goToPage: async (page) => {
+      const apis = apisRef.current;
+      if (!apis) return false;
+      const p = Number(page) || 1;
+
+      try {
+        if (typeof apis.gotoLocation === "function") {
+          try { await apis.gotoLocation(p); return true; } catch {}
+          try { await apis.gotoLocation({ pageNumber: p }); return true; } catch {}
+        }
+        if (typeof apis.setCurrentPage === "function") {
+          await apis.setCurrentPage(p); return true;
+        }
+        if (typeof apis.scrollToPage === "function") {
+          await apis.scrollToPage(p); return true;
+        }
+      } catch (e) {
+        console.warn("[PdfViewer] goToPage failed:", e);
+      }
+      console.warn("[PdfViewer] No working navigation API in this SDK build.");
+      return false;
+    },
+  }));
+
   useEffect(() => {
     setLastError("");
     if (!fileUrl) { setStatus("no_url"); return; }
@@ -41,7 +66,6 @@ export default function PdfViewer({ fileUrl, onPageInfo, onSelectionText }) {
       try {
         setStatus("loading");
 
-        // Reset container
         hostRef.current.innerHTML = "";
         const inner = document.createElement("div");
         inner.id = divIdRef.current;
@@ -51,11 +75,9 @@ export default function PdfViewer({ fileUrl, onPageInfo, onSelectionText }) {
         inner.style.height = "100%";
         hostRef.current.appendChild(inner);
 
-        // Create viewer
         const view = new window.AdobeDC.View({ clientId: KEY, divId: divIdRef.current });
         viewRef.current = view;
 
-        // Start preview
         const preview = view.previewFile(
           { content: { location: { url: fileUrl } }, metaData: { fileName } },
           {
@@ -68,84 +90,77 @@ export default function PdfViewer({ fileUrl, onPageInfo, onSelectionText }) {
           }
         );
 
-        // Wait until the viewer and APIs are definitely ready
         const viewer = await preview;
         const apis = await viewer.getAPIs();
         apisRef.current = apis;
 
         const FP = window.AdobeDC.View.Enum.FilePreviewEvents;
 
-        // Single, consolidated event listener registered AFTER APIs are ready
+        const extractText = (payload) => {
+          if (!payload) return "";
+          if (typeof payload === "string") return payload;
+          const arr = payload.selectedContent || payload.selections || payload.data || payload.items || null;
+          if (Array.isArray(arr)) {
+            return arr
+              .flatMap((g) =>
+                Array.isArray(g?.items)
+                  ? g.items.map((it) => it?.str || it?.text || it?.content || "")
+                  : [g?.text || g?.Str || g?.str || g?.content || ""]
+              )
+              .filter(Boolean)
+              .join(" ");
+          }
+          return (payload.text || payload.content || "").toString();
+        };
+
         view.registerCallback(
           window.AdobeDC.View.Enum.CallbackType.EVENT_LISTENER,
           async (event) => {
             try {
-              switch (event.type) {
-                // Viewer became usable
-                case "APP_RENDERING_DONE":
-                case "APP_RENDERED":
-                case "DOCUMENT_OPEN":
-                case "DOCUMENT_LOADED":
-                case "PAGES_RENDERED":
-                case "PAGE_VIEW": {
-                  setStatus("ready");
-                  if (onPageInfo && apisRef.current?.getPageRange) {
-                    const range = await apisRef.current.getPageRange();
-                    const page = Array.isArray(range) && range.length ? range[0] : 1;
-                    onPageInfo({ file: fileName, page });
-                  }
-                  break;
+              const ready = [
+                FP.APP_RENDERING_DONE,
+                FP.APP_RENDERED,
+                FP.DOCUMENT_OPEN,
+                FP.DOCUMENT_LOADED,
+                FP.PAGES_RENDERED,
+                FP.PAGE_VIEW,
+                FP.PAGES_IN_VIEW_CHANGE,
+              ];
+              if (ready.includes(event.type)) {
+                setStatus("ready");
+                if (onPageInfo && apisRef.current?.getPageRange) {
+                  const range = await apisRef.current.getPageRange();
+                  const page = Array.isArray(range) && range.length ? range[0] : 1;
+                  onPageInfo({ file: fileName, page });
                 }
+              }
 
-                // Page changed
-                case "PAGES_IN_VIEW_CHANGE": {
-                  if (onPageInfo && apisRef.current?.getPageRange) {
-                    const range = await apisRef.current.getPageRange();
-                    const page = Array.isArray(range) && range.length ? range[0] : 1;
-                    onPageInfo({ file: fileName, page });
-                  }
-                  break;
-                }
+              if (event.type === FP.PREVIEW_SELECTION_END) {
+                if (!onSelectionText) return;
 
-                // Text selection finished → extract via the same, already-ready APIs
-                case "PREVIEW_SELECTION_END": {
-                  if (!onSelectionText) break;
-
-                  let text = "";
+                let text = extractText(event?.data || event?.detail || "");
+                if (!text && apisRef.current?.getSelectedContent) {
                   try {
-                    const sel = await apis.getSelectedContent();
-                    const data = sel?.data ?? sel?.selectedContent ?? sel?.selections ?? sel?.text ?? sel?.content;
-
-                    if (typeof data === "string") {
-                      text = data;
-                    } else if (Array.isArray(data)) {
-                      text = data
-                        .map((it) => it?.Str || it?.str || it?.text || it?.content || "")
-                        .filter(Boolean)
-                        .join(" ");
-                    } else if (sel?.text) {
-                      text = sel.text;
-                    } else if (sel?.content) {
-                      text = sel.content;
-                    }
-                    text = (text || "").replace(/\s+/g, " ").trim();
-                  } catch {
-                    text = "";
-                  }
-                  if (!text) break;
-
-                  let page = 1;
-                  try {
-                    const range = await apis.getPageRange();
-                    page = Array.isArray(range) && range.length ? range[0] : 1;
+                    const sel = await apisRef.current.getSelectedContent();
+                    text =
+                      extractText(sel) ||
+                      extractText(sel?.data) ||
+                      extractText(sel?.selectedContent) ||
+                      "";
                   } catch {}
+                }
+                text = (text || "").replace(/\s+/g, " ").trim();
 
-                  onSelectionText(text, { file: fileName, page });
-                  break;
+                let page = 1;
+                try {
+                  const range = await apisRef.current.getPageRange();
+                  page = Array.isArray(range) && range.length ? range[0] : 1;
+                } catch {
+                  const d = event?.data || event?.detail || {};
+                  page = d?.pageNumber || d?.page || 1;
                 }
 
-                default:
-                  break;
+                if (text) onSelectionText(text, { file: fileName, page });
               }
             } catch (e) {
               console.warn("[Adobe EVENT_LISTENER] handler error:", e);
@@ -155,18 +170,17 @@ export default function PdfViewer({ fileUrl, onPageInfo, onSelectionText }) {
             enableFilePreviewEvents: true,
             listenOn: [
               FP.APP_RENDERING_DONE,
-              FP.DOCUMENT_OPEN,
-              FP.PAGES_IN_VIEW_CHANGE,
-              FP.PREVIEW_SELECTION_END,
               FP.APP_RENDERED,
+              FP.DOCUMENT_OPEN,
               FP.DOCUMENT_LOADED,
               FP.PAGES_RENDERED,
               FP.PAGE_VIEW,
+              FP.PAGES_IN_VIEW_CHANGE,
+              FP.PREVIEW_SELECTION_END,
             ],
           }
         );
 
-        // Safety timeout: if events don’t fire, clear overlay anyway
         if (safetyTimerRef.current) clearTimeout(safetyTimerRef.current);
         safetyTimerRef.current = setTimeout(() => setStatus("ready"), 2000);
       } catch (e) {
@@ -236,4 +250,6 @@ export default function PdfViewer({ fileUrl, onPageInfo, onSelectionText }) {
       )}
     </div>
   );
-}
+});
+
+export default PdfViewer;
