@@ -1,6 +1,10 @@
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 
-const KEY = import.meta.env.VITE_ADOBE_EMBED_KEY || "";
+// const KEY = import.meta.env.VITE_ADOBE_EMBED_KEY || "";
+const KEY =
+  (typeof window !== "undefined" && window.__CONFIG?.ADOBE_EMBED_API_KEY) ||
+  import.meta.env.VITE_ADOBE_EMBED_KEY ||
+  "";
 
 /**
  * Props:
