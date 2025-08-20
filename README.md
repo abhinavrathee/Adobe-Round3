@@ -38,3 +38,9 @@ AcroLens helps users analyze PDFs in depth, connect insights across documents, a
 1. **Build the image**
    ```bash
    docker build --platform linux/amd64 -t acrolens .
+   ```
+2. **Run the container**
+   ```bash
+   docker run -v /path/to/credentials:/credentials -e ADOBE_EMBED_API_KEY=<YOUR_ADOBE_EMBED_API_KEY> -e LLM_PROVIDER=gemini -e   GOOGLE_APPLICATION_CREDENTIALS=/credentials/adbe-gcp.json -e GEMINI_MODEL=gemini-2.5-flash -e TTS_PROVIDER=gcp -p 8080:8080 acrolens
+
+   ```
