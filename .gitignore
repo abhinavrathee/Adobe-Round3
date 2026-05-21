@@ -1,0 +1,20 @@
+# Environment files (contain API keys and secrets)
+.env
+*.env.local
+*.env.*.local
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Logs
+*.log
