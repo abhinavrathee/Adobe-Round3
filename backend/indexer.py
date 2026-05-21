@@ -30,7 +30,7 @@ class Index:
     matrix: Any
     chunks: List[Chunk]
 
-_build_lock = threading.Lock()
+_build_lock = threading.RLock()
 _need_reindex = False
 
 def mark_need_reindex():
@@ -53,24 +53,25 @@ def _extract_pdf_text_per_page(pdf_path: Path) -> List[str]:
     return pages
 
 def build_index() -> Index:
-    print("[indexer] building index…")
-    LIB_DIR.mkdir(parents=True, exist_ok=True)
-    chunks: List[Chunk] = []
-    for p in sorted(LIB_DIR.glob("*.pdf")):
-        page_texts = _extract_pdf_text_per_page(p)
-        for i, t in enumerate(page_texts, start=1):
-            if t:
-                chunks.append(Chunk(pdf_name=p.name, page=i, text=t))
+    with _build_lock:
+        print("[indexer] building index…")
+        LIB_DIR.mkdir(parents=True, exist_ok=True)
+        chunks: List[Chunk] = []
+        for p in sorted(LIB_DIR.glob("*.pdf")):
+            page_texts = _extract_pdf_text_per_page(p)
+            for i, t in enumerate(page_texts, start=1):
+                if t:
+                    chunks.append(Chunk(pdf_name=p.name, page=i, text=t))
 
-    texts = [c.text for c in chunks] or [""]
-    vectorizer = TfidfVectorizer(stop_words="english", max_features=50000, ngram_range=(1, 2))
-    matrix = vectorizer.fit_transform(texts)
-    idx = Index(vectorizer=vectorizer, matrix=matrix, chunks=chunks)
-    IDX_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with open(IDX_PATH, "wb") as f:
-        pickle.dump(idx, f)
-    print(f"[indexer] done. chunks={len(chunks)}")
-    return idx
+        texts = [c.text for c in chunks] or [""]
+        vectorizer = TfidfVectorizer(stop_words="english", max_features=50000, ngram_range=(1, 2))
+        matrix = vectorizer.fit_transform(texts)
+        idx = Index(vectorizer=vectorizer, matrix=matrix, chunks=chunks)
+        IDX_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with open(IDX_PATH, "wb") as f:
+            pickle.dump(idx, f)
+        print(f"[indexer] done. chunks={len(chunks)}")
+        return idx
 
 def _load() -> Index | None:
     if IDX_PATH.exists():

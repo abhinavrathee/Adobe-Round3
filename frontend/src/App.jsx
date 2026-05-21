@@ -34,7 +34,7 @@ function Header({ podcastSlot }) {
 }
 
 export default function App() {
-  const [currentUrl, setCurrentUrl] = useState(`${API_BASE}/api/file/${encodeURIComponent("sample.pdf")}`);
+  const [currentUrl, setCurrentUrl] = useState("");
   const [refreshFlag, setRefreshFlag] = useState(0);
 
   const [selectionText, setSelectionText] = useState("");
