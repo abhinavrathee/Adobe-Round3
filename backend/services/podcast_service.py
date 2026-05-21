@@ -49,7 +49,7 @@ def synthesize_podcast(
     if rate:
         os.environ.setdefault("ESPEAK_SPEED", str(rate))
 
-    provider_eff = provider or os.getenv("TTS_PROVIDER", "gcp")
+    provider_eff = provider or os.getenv("TTS_PROVIDER", "local")
     print(f"[podcast] TTS provider={provider_eff}")
 
     def _single_voice(reason: str, pick_voice: Optional[str] = None):

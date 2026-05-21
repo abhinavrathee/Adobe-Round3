@@ -11,7 +11,11 @@ import shutil
 import time
 import threading
 import re
-import os, json  # <-- added
+import os, json
+from dotenv import load_dotenv
+
+# Load .env BEFORE any other module reads os.getenv
+load_dotenv(dotenv_path=Path(__file__).parent / ".env")
 
 from indexer import (
     LIB_DIR,
