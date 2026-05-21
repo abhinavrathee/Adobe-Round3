@@ -105,27 +105,50 @@ def _azure_tts(text: str, output_file: str, voice: Optional[str]) -> str:
     return output_file
 
 
-def _local_espeak(text: str, output_file: str, voice: Optional[str]) -> str:
-    """Very simple local TTS using espeak-ng -> WAV -> MP3 (requires pydub/ffmpeg for MP3)."""
+def _local_tts(text: str, output_file: str, voice: Optional[str]) -> str:
+    """Local TTS: tries gTTS (free, cross-platform) first, then espeak-ng as fallback."""
+    Path(output_file).parent.mkdir(parents=True, exist_ok=True)
+
+    # --- Strategy 1: gTTS (Google Translate TTS — free, no API key) ---
+    try:
+        from gtts import gTTS  # type: ignore
+        lang = os.getenv("GTTS_LANG", "en")
+        tts = gTTS(text=text, lang=lang, slow=False)
+        tts.save(output_file)
+        print(f"[tts] gTTS audio saved: {output_file}")
+        return output_file
+    except ImportError:
+        pass  # gTTS not installed, try espeak-ng
+    except Exception as e:
+        print(f"[tts] gTTS failed ({e}), trying espeak-ng...")
+
+    # --- Strategy 2: espeak-ng (Linux / Docker) ---
     import subprocess
     espeak_voice = voice or os.getenv("ESPEAK_VOICE", "en")
     espeak_speed = os.getenv("ESPEAK_SPEED", "150")
     wav_path = output_file.replace(".mp3", ".wav")
     cmd = ["espeak-ng", "-v", espeak_voice, "-s", str(espeak_speed), "-w", wav_path, text]
-    res = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-    if res.returncode != 0:
-        raise RuntimeError(res.stderr or "espeak-ng failed")
-    if output_file.lower().endswith(".mp3"):
-        if not _HAS_PYDUB:
+    try:
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        if res.returncode != 0:
+            raise RuntimeError(res.stderr or "espeak-ng failed")
+        if output_file.lower().endswith(".mp3") and _HAS_PYDUB:
+            from pydub import AudioSegment  # type: ignore
+            AudioSegment.from_wav(wav_path).export(output_file, format="mp3")
+            try: Path(wav_path).unlink()
+            except Exception: pass
+            return output_file
+        if not output_file.lower().endswith(".mp3"):
+            Path(wav_path).rename(output_file)
+        else:
             Path(wav_path).rename(output_file.replace(".mp3", ".wav"))
             return output_file.replace(".mp3", ".wav")
-        from pydub import AudioSegment  # type: ignore
-        AudioSegment.from_wav(wav_path).export(output_file, format="mp3")
-        try: Path(wav_path).unlink()
-        except Exception: pass
         return output_file
-    Path(wav_path).rename(output_file)
-    return output_file
+    except FileNotFoundError:
+        raise RuntimeError(
+            "No local TTS engine found. Install gTTS (pip install gTTS) "
+            "or espeak-ng (apt install espeak-ng)."
+        )
 
 # ------------------ Chunking / Merge ------------------
 
@@ -187,4 +210,4 @@ def generate_audio(text: str, output_file: str, provider: Optional[str] = None, 
         return _gcp_tts(text, output_file, voice)
     if prov == "azure":
         return _azure_tts(text, output_file, voice)
-    return _local_espeak(text, output_file, voice)
+    return _local_tts(text, output_file, voice)

@@ -42,6 +42,7 @@ export default function App() {
   const [related, setRelated] = useState([]);
   const [relBusy, setRelBusy] = useState(false);
   const [relHint, setRelHint] = useState("Select some text in the PDF to see related results.");
+  const [activeRelatedIdx, setActiveRelatedIdx] = useState(-1);
 
   const [insights, setInsights] = useState(null);
   const [insBusy, setInsBusy] = useState(false);
@@ -51,6 +52,7 @@ export default function App() {
   // Navigation refs
   const pdfRef = useRef(null);
   const pendingNavRef = useRef(null); // {file, page} after doc switch
+  const navigatingViaSnippetRef = useRef(false); // true when clicking a related card
 
   const handleUploaded = (name) => {
     if (name) setCurrentUrl(`${API_BASE}/api/file/${encodeURIComponent(name)}`);
@@ -108,9 +110,14 @@ export default function App() {
   useEffect(() => {
     const name = getNameFromUrl(currentUrl);
     if (!name) return;
-    setSelectionText("");
-    setRelated([]);
-    setRelHint("Select some text in the PDF to see related results.");
+    // When navigating via a related snippet click, preserve the related results
+    if (navigatingViaSnippetRef.current) {
+      navigatingViaSnippetRef.current = false;
+    } else {
+      setSelectionText("");
+      setRelated([]);
+      setRelHint("Select some text in the PDF to see related results.");
+    }
     fetchAutoInsightsWithRetry(name, 1);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentUrl]);
@@ -261,6 +268,7 @@ export default function App() {
     setSelectionText(sel);
     setRelated([]);
     setRelHint("");
+    setActiveRelatedIdx(-1);
 
     if (!sel || sel.length < 8) {
       setRelHint("Tip: select a longer phrase for better results.");
@@ -283,7 +291,7 @@ export default function App() {
   const onUseSelected = useCallback(async () => {
     const sel = (selectionText || "").trim();
     if (!sel) return;
-    setRelated([]); setRelHint(""); setRelBusy(true);
+    setRelated([]); setRelHint(""); setRelBusy(true); setActiveRelatedIdx(-1);
     try {
       const items = await runSelectionSearchCascade(sel, cur.current.file || getNameFromUrl(currentUrl), cur.current.page || 1, true);
       setRelated(items);
@@ -296,12 +304,16 @@ export default function App() {
   }, [selectionText, currentUrl, runSelectionSearchCascade]);
 
   // CLICK A RELATED CARD → open page (switch docs if needed)
-  const openRelated = useCallback((r) => {
+  const openRelated = useCallback((r, idx) => {
     const page = r.page || r.page_num || r.pageNumber || r.metadata?.page || 1;
     const file = r.pdf_name || r.file || r.filename || r.metadata?.file || "";
     const currentName = getNameFromUrl(currentUrl);
 
+    setActiveRelatedIdx(idx);
+
     if (file && file !== currentName) {
+      // Mark that we're navigating via snippet — preserve related panel
+      navigatingViaSnippetRef.current = true;
       pendingNavRef.current = { file, page };
       setCurrentUrl(`${API_BASE}/api/file/${encodeURIComponent(file)}`);
       return;
@@ -357,6 +369,7 @@ export default function App() {
               lastSel={selectionText}
               busy={relBusy}
               hint={relHint}
+              activeIdx={activeRelatedIdx}
               onUseSelected={onUseSelected}
               onOpen={openRelated}
             />

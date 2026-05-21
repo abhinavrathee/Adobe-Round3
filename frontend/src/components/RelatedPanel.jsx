@@ -3,6 +3,7 @@ export default function RelatedPanel({
   lastSel = "",
   busy = false,
   hint = "",
+  activeIdx = -1,
   onUseSelected,
   onOpen, // click handler for a card
 }) {
@@ -65,14 +66,19 @@ export default function RelatedPanel({
             <li
               key={i}
               className="related-item"
-              onClick={() => onOpen && onOpen(r)}
+              onClick={() => onOpen && onOpen(r, i)}
               style={{
                 cursor: onOpen ? "pointer" : "default",
-                border: "1px solid rgba(148,163,184,.25)", // slate-400/25
+                border: i === activeIdx
+                  ? "2px solid #60a5fa"
+                  : "1px solid rgba(148,163,184,.25)",
                 borderRadius: 14,
                 padding: 12,
-                background: "rgba(255,255,255,0.06)", // subtle card on dark bg
-                color: "#e5e7eb", // force readable text on dark theme
+                background: i === activeIdx
+                  ? "rgba(96,165,250,0.12)"
+                  : "rgba(255,255,255,0.06)",
+                color: "#e5e7eb",
+                transition: "border 0.2s, background 0.2s",
               }}
             >
               <div
