@@ -219,11 +219,11 @@ def gemini_podcast_overview(doc_text: str,
 
     insights_text = ""
     if insights:
-        insights_text = "\n".join(f"- {re.sub(r'\\s+', ' ', x).strip()}" for x in insights[:8])
+        insights_text = "\n".join(f"- {re.sub(r'\s+', ' ', x).strip()}" for x in insights[:8])
 
     related_text = ""
     if related:
-        related_text = "\n".join(re.sub(r"\\s+", " ", x).strip() for x in related[:6])
+        related_text = "\n".join(re.sub(r"\s+", " ", x).strip() for x in related[:6])
 
     prompt = PODCAST_PROMPT.format(
         target_words=max(320, min(700, int(target_words or 450))),
@@ -236,10 +236,10 @@ def gemini_podcast_overview(doc_text: str,
         resp = model.generate_content(prompt)
         text = (getattr(resp, "text", "") or "").strip()
         # Safety: remove stray bullets/markdown and squeeze spaces
-        text = re.sub(r"^[\\-\\*\\d\\.)\\s]+", "", text)
-        text = re.sub(r"\\s+", " ", text).strip()
+        text = re.sub(r"^[\-\*\d\.\)\s]+", "", text)
+        text = re.sub(r"\s+", " ", text).strip()
         return text
     except Exception as e:
         # Fallback: if model fails, at least compress the text naively
-        base = re.sub(r"\\s+", " ", (doc_text or ""))[:2000]
+        base = re.sub(r"\s+", " ", (doc_text or ""))[:2000]
         return f"This document provides an overview based on selected sections. Key ideas include: {base}"
