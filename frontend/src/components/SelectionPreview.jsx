@@ -1,14 +1,14 @@
 export default function SelectionPreview({ text }) {
   return (
-    <div className="rounded-2xl border border-gray-200 bg-white/90 shadow-sm">
-      <div className="px-4 py-3 border-b">
-        <h3 className="font-semibold text-gray-800">Selection</h3>
+    <div className="card">
+      <div style={{ borderBottom: "1px solid var(--border)", paddingBottom: 8, marginBottom: 8 }}>
+        <h3 className="card-title" style={{ margin: 0 }}>Selection</h3>
       </div>
-      <div className="p-4 text-sm text-gray-700">
+      <div style={{ fontSize: 13, lineHeight: 1.5 }}>
         {text ? (
-          <div className="whitespace-pre-wrap">{text}</div>
+          <div style={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{text}</div>
         ) : (
-          <p className="text-gray-500">Select some text in the PDF…</p>
+          <p className="muted">Select some text in the PDF…</p>
         )}
       </div>
     </div>

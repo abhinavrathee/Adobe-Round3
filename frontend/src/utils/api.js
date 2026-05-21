@@ -1,10 +1,11 @@
 const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:5001";
 
-export async function fetchInsights({ docId, pdfName }) {
-  const url = new URL(`${API_BASE}/api/insights`);
-  if (docId) url.searchParams.set("doc_id", docId);
-  if (pdfName) url.searchParams.set("pdf_name", pdfName);
-  const res = await fetch(url.toString());
+export async function fetchInsights({ selectionText }) {
+  const res = await fetch(`${API_BASE}/api/insights`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ selection_text: selectionText }),
+  });
   return res.json();
 }
 
