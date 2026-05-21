@@ -1,4 +1,4 @@
-# AcroLens – Intelligent PDF Workbench
+# AcroLens – Intelligent PDF Workbench 
 
 A document intelligence system built for the **Adobe India Hackathon 2025**.  
 AcroLens helps users analyze PDFs in depth, connect insights across documents, and even generate podcast-style audio summaries.  
