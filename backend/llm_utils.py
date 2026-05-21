@@ -8,13 +8,35 @@ load_dotenv(dotenv_path=Path(__file__).parent / ".env")
 
 import google.generativeai as genai
 
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+# Support all auth methods Adobe may use during evaluation:
+#   1. GOOGLE_API_KEY (Adobe's preferred env var name)
+#   2. GEMINI_API_KEY (our legacy env var name)
+#   3. GOOGLE_APPLICATION_CREDENTIALS (service account JSON file path)
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY") or ""
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+CREDENTIALS_PATH = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "")
+
+_configured = False
 
 def _cfg():
-    if not GEMINI_API_KEY:
-        raise RuntimeError("GEMINI_API_KEY not set in backend/.env")
-    genai.configure(api_key=GEMINI_API_KEY)
+    global _configured
+    if _configured:
+        return genai
+    # Priority: API key > service account credentials
+    if GOOGLE_API_KEY:
+        genai.configure(api_key=GOOGLE_API_KEY)
+    elif CREDENTIALS_PATH:
+        # Service account auth — the google.generativeai SDK picks up
+        # GOOGLE_APPLICATION_CREDENTIALS automatically when no API key is given.
+        # We just need to ensure the env var is set.
+        os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = CREDENTIALS_PATH
+        genai.configure()
+    else:
+        raise RuntimeError(
+            "No LLM credentials found. Set one of: "
+            "GOOGLE_API_KEY, GEMINI_API_KEY, or GOOGLE_APPLICATION_CREDENTIALS"
+        )
+    _configured = True
     return genai
 
 # ---------- Prompts (Insights) ----------

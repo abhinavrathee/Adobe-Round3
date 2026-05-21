@@ -22,3 +22,6 @@ Thumbs.db
 # Python
 __pycache__/
 *.pyc
+
+# Reference materials (not part of submission)
+Round 1 And 2/
