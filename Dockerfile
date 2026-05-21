@@ -26,7 +26,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Python deps
 WORKDIR /app
 COPY backend/requirements.txt ./requirements.txt
-RUN pip install --no-cache-dir -r requirements.txt
+ENV PYTHONDONTWRITEBYTECODE=1
+RUN pip install --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
 
 # Copy backend code
 COPY backend/ /app/
