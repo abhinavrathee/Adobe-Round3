@@ -39,8 +39,7 @@ COPY --from=webbuild /frontend/dist /web
 # Nginx config (serve SPA at /, proxy /api, /static, /config.js to uvicorn)
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 
-# Ensure nginx does not daemonize (remove any existing directive, then add ours)
-RUN sed -i '/^daemon /d' /etc/nginx/nginx.conf && echo 'daemon off;' >> /etc/nginx/nginx.conf
+# Note: daemon off is handled in start.sh at runtime
 
 # Uvicorn will listen on 127.0.0.1:8000 internally; nginx exposes 8080
 ENV PORT=8080
