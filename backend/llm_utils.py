@@ -6,38 +6,61 @@ from dotenv import load_dotenv
 # Always load the .env next to this file
 load_dotenv(dotenv_path=Path(__file__).parent / ".env")
 
-import google.generativeai as genai
-
-# Support all auth methods Adobe may use during evaluation:
-#   1. GOOGLE_API_KEY (Adobe's preferred env var name)
-#   2. GEMINI_API_KEY (our legacy env var name)
-#   3. GOOGLE_APPLICATION_CREDENTIALS (service account JSON file path)
+# ---------- Provider detection ----------
+# Supports: Groq (primary), Gemini (fallback)
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY") or ""
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
-CREDENTIALS_PATH = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "")
+LLM_MODEL = os.getenv("LLM_MODEL", "")  # override model name if needed
 
+USE_GROQ = bool(GROQ_API_KEY)
+
+if USE_GROQ:
+    from groq import Groq
+    _groq_client = Groq(api_key=GROQ_API_KEY)
+    _DEFAULT_MODEL = "llama-3.3-70b-versatile"
+    print(f"[llm_utils] Using Groq (model={LLM_MODEL or _DEFAULT_MODEL})")
+else:
+    import google.generativeai as genai
+    _DEFAULT_MODEL = "gemini-2.5-flash"
+    print(f"[llm_utils] Using Gemini (model={LLM_MODEL or _DEFAULT_MODEL})")
+
+MODEL = LLM_MODEL or _DEFAULT_MODEL
+
+# ---------- Gemini config (only if used) ----------
 _configured = False
 
-def _cfg():
+def _cfg_gemini():
     global _configured
     if _configured:
-        return genai
-    # Priority: API key > service account credentials
+        return
     if GOOGLE_API_KEY:
         genai.configure(api_key=GOOGLE_API_KEY)
-    elif CREDENTIALS_PATH:
-        # Service account auth — the google.generativeai SDK picks up
-        # GOOGLE_APPLICATION_CREDENTIALS automatically when no API key is given.
-        # We just need to ensure the env var is set.
-        os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = CREDENTIALS_PATH
-        genai.configure()
     else:
-        raise RuntimeError(
-            "No LLM credentials found. Set one of: "
-            "GOOGLE_API_KEY, GEMINI_API_KEY, or GOOGLE_APPLICATION_CREDENTIALS"
-        )
+        raise RuntimeError("No Gemini API key found. Set GEMINI_API_KEY or GOOGLE_API_KEY.")
     _configured = True
-    return genai
+
+# ---------- Unified LLM call ----------
+def _llm_call(prompt: str, json_mode: bool = False) -> str:
+    """Call the configured LLM and return raw text response."""
+    if USE_GROQ:
+        kwargs = {
+            "model": MODEL,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.3,
+            "max_tokens": 2048,
+        }
+        if json_mode:
+            kwargs["response_format"] = {"type": "json_object"}
+        resp = _groq_client.chat.completions.create(**kwargs)
+        return resp.choices[0].message.content or ""
+    else:
+        _cfg_gemini()
+        model = genai.GenerativeModel(MODEL)
+        config = {}
+        if json_mode:
+            config["response_mime_type"] = "application/json"
+        resp = model.generate_content(prompt, generation_config=config if config else None)
+        return (getattr(resp, "text", "") or "").strip()
 
 # ---------- Prompts (Insights) ----------
 
@@ -129,7 +152,7 @@ def _parse_freeform(text: str) -> dict:
 def _minimal_from_text(selection: str) -> dict:
     # Synthesize some bullets and questions if model returns little
     s = re.sub(r"\s+", " ", selection or "").strip()
-    sentences = re.split(r"(?<=[\.!?])\s+", s)
+    sentences = re.split(r"(?<=[\.\!\?])\s+", s)
     core = [p for p in sentences if 20 <= len(p) <= 220][:4] or sentences[:4]
 
     # naive topic terms
@@ -157,16 +180,9 @@ def gemini_insights(selection: str) -> dict:
     if not selection:
         return {"error": "empty_selection"}
 
-    _cfg()
-    model = genai.GenerativeModel(GEMINI_MODEL)
-
     # 1) Try strict JSON first
     try:
-        resp = model.generate_content(
-            JSON_PROMPT.format(selection=selection),
-            generation_config={"response_mime_type": "application/json"},
-        )
-        raw = (getattr(resp, "text", "") or "").strip()
+        raw = _llm_call(JSON_PROMPT.format(selection=selection), json_mode=True)
         data = json.loads(raw)
         result = {
             "keyInsights":    _clean_and_clip(data.get("keyInsights")),
@@ -182,33 +198,32 @@ def gemini_insights(selection: str) -> dict:
 
     # 2) Fallback: free-form then parse
     try:
-        resp2 = model.generate_content(FALLBACK_PROMPT.format(selection=selection))
-        text = (getattr(resp2, "text", "") or "").strip()
+        text = _llm_call(FALLBACK_PROMPT.format(selection=selection))
         parsed = _parse_freeform(text)
         if any(parsed.values()):
             return parsed
     except Exception as e:
-        return {"error": f"gemini_error: {type(e).__name__}: {e}"}
+        return {"error": f"llm_error: {type(e).__name__}: {e}"}
 
     # 3) Last resort
     return _minimal_from_text(selection)
 
 # =======================================================================
-# NEW: Podcast overview generator (single voice, 2–5 minutes target)
+# Podcast overview generator (single voice, 2-5 minutes target)
 # =======================================================================
 
 PODCAST_PROMPT = """You are a friendly narrator. Create a SPOKEN OVERVIEW of a PDF for a listener.
-Goal: in about {target_words} words (roughly 2–5 minutes), explain WHAT this PDF is about,
+Goal: in about {target_words} words (roughly 2-5 minutes), explain WHAT this PDF is about,
 what it covers, and the most important ideas. Use only the provided material.
 
 STYLE RULES (important):
 - Do NOT mention page numbers, tables, or figure labels.
 - Do NOT read raw lists or serial numbers. Prefer natural sentences.
-- Be concise, engaging, and scannable by ear—short sentences are good.
+- Be concise, engaging, and scannable by ear-short sentences are good.
 - Keep a neutral, informative tone. No markdown, no headings, no bullets.
 - Use names/terms from the doc only when helpful; avoid filler.
-- Structure like: quick hook → what the document covers → 3–6 core ideas/themes →
-  notable contrasts or cautions → quick closing with who benefits / next step.
+- Structure like: quick hook -> what the document covers -> 3-6 core ideas/themes ->
+  notable contrasts or cautions -> quick closing with who benefits / next step.
 
 DOCUMENT EXCERPTS:
 \"\"\"{doc_text}\"\"\"
@@ -234,11 +249,8 @@ def gemini_podcast_overview(doc_text: str,
                             target_words: int = 450) -> str:
     """
     Returns a natural-sounding narration (no lists, no page refs),
-    ~target_words long (2–5 min).
+    ~target_words long (2-5 min).
     """
-    _cfg()
-    model = genai.GenerativeModel(GEMINI_MODEL)
-
     insights_text = ""
     if insights:
         insights_text = "\n".join("- " + re.sub(r'\s+', ' ', x).strip() for x in insights[:8])
@@ -255,8 +267,7 @@ def gemini_podcast_overview(doc_text: str,
     )
 
     try:
-        resp = model.generate_content(prompt)
-        text = (getattr(resp, "text", "") or "").strip()
+        text = _llm_call(prompt)
         # Safety: remove stray bullets/markdown and squeeze spaces
         text = re.sub(r"^[\-\*\d\.\)\s]+", "", text)
         text = re.sub(r"\s+", " ", text).strip()
