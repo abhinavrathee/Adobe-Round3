@@ -241,7 +241,7 @@ def gemini_podcast_overview(doc_text: str,
 
     insights_text = ""
     if insights:
-        insights_text = "\n".join(f"- {re.sub(r'\s+', ' ', x).strip()}" for x in insights[:8])
+        insights_text = "\n".join("- " + re.sub(r'\s+', ' ', x).strip() for x in insights[:8])
 
     related_text = ""
     if related:
