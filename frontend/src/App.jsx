@@ -7,7 +7,7 @@ import InsightsBulb from "./components/InsightsBulb";
 import PodcastBar from "./components/PodcastBar";
 import "./App.css";
 
-const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:5001";
+const API_BASE = import.meta.env.VITE_API_BASE || "";
 
 const getNameFromUrl = (url) => {
   try {
